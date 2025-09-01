@@ -33,7 +33,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--crop', choices=['auto', 'none'], default='auto', help='Border crop mode.')
     parser.add_argument('--crop-margin', type=int, default=8, help='Border crop margin (pixels) for safety.')
     
-    parser.add_argument('--no-resize-back', action='store_true', help='If set, stabilized.mp4 keeps cropped size instead of resizing back to original.')
+    parser.add_argument('--stab-no-resize', action='store_true', help='If set, stabilized.mp4 keeps cropped size instead of resizing back to original.')
+    
+    parser.add_argument('--comp-no-resize', action='store_true', help='If set, comparison.mp4 keeps cropped size of stabilized video instead of resizing back to original.')
+    parser.add_argument('--comp-v-align', choices=['top', 'center', 'bottom'], default='center', help='Vertical alignment preset (eg. "center" | "top" | "bottom") when not resizing comparison.')
+    parser.add_argument('--comp-h-align', choices=['left', 'center', 'right'], default='center', help='Horizontal alignment preset (eg. "center" | "left" | "right") when not resizing comparison.')
     
     return parser.parse_args()
 
@@ -58,7 +62,7 @@ def main() -> None:
     frames = []
     refs = []
     
-    # 1. Collect reference points
+    # Collect reference points
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -67,7 +71,7 @@ def main() -> None:
         frames.append(frame)
         keypoints = pose.keypoints(frame)
         
-        # Prefer ''mid_hip' if present; otherwise fallback to seg centroid; else frame center
+        # Prefer 'mid_hip' if present; otherwise fallback to seg centroid; else frame center
         if 'mid_hip' in keypoints:
             x, y, _ = keypoints['mid_hip']
         else:
@@ -91,7 +95,7 @@ def main() -> None:
     
     dx_smooth, dy_smooth, dx_raw, dy_raw = compute_shifts(refs, cx, cy, args.smooth_window)
     
-    # 2. Save transforms
+    # Save transforms
     transforms_csv = os.path.join(args.outdir, 'transforms.csv')
     with open(transforms_csv, 'w', newline='') as f:
         w = csv.writer(f)
@@ -106,14 +110,20 @@ def main() -> None:
         x0, y0, wc, hc = 0, 0, W, H
         
     # Size for stabilized.mp4
-    if args.no_resize_back:
+    if args.stab_no_resize:
         W_stab, H_stab = wc, hc
     else:
-        W_stab, H_stab = W, H
+        W_stab, H_stab = W, 
     
-    # 3. Apply warps and write videos
+    # Size for comparison.mp4
+    if args.comp_no_resize:
+        W_comp, H_comp = W + W_stab, max(H, H_stab)
+    else:
+        W_comp, H_comp = 2*W, H
+    
+    # Apply warps and write videos
     out_stab = writer(os.path.join(args.outdir, 'stabilized.mp4'), W_stab, H_stab, fps)
-    out_comp = writer(os.path.join(args.outdir, 'comparison.mp4'), 2*W, H, fps)
+    out_comp = writer(os.path.join(args.outdir, 'comparison.mp4'), W_comp, H_comp, fps)
     
     for i, frame in enumerate(frames):
         stabilized = warp(frame, float(dx_smooth[i]), float(dy_smooth[i]))
@@ -123,10 +133,17 @@ def main() -> None:
             stabilized = stabilized[y0:y0+hc, x0:x0+wc]
             
         # Resize back (for stabilized.mp4) unless user opted out
-        if not args.no_resize_back and (stabilized.shape[1] != W or stabilized.shape[0] != H):
+        if not args.stab_no_resize and (stabilized.shape[1] != W or stabilized.shape[0] != H):
             stabilized = cv2.resize(stabilized, (W, H), interpolation=cv2.INTER_LINEAR)
         
-        comparison = side_by_side(frame, stabilized)
+        comparison = side_by_side(
+            frame,
+            stabilized,
+            resize_right=not args.comp_no_resize,
+            v_align=args.comp_v_align,
+            h_align=args.comp_h_align
+        )
+        
         out_stab.write(stabilized)
         out_comp.write(comparison)
     
