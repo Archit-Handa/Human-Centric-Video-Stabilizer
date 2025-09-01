@@ -16,13 +16,13 @@ class Pose2D:
     
     Args:
         onnx_path: Path to the ONNX model.
-        input_size: Input size (width, height) expected by the ONNX model. Default is (256, 256).
+        input_size: Input size (width, height) expected by the ONNX model. Default is (192, 256).
     '''
     
     def __init__(
         self,
         onnx_path: Optional[str]=None,
-        input_size: Tuple[int, int]=(256, 256)
+        input_size: Tuple[int, int]=(192, 256)
     ) -> None:
         self.onnx_path = onnx_path
         self.input_size = input_size
