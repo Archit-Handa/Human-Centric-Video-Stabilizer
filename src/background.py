@@ -64,7 +64,7 @@ class BackgroundRemover:
             prob = softmax(out, axi=1)[0, 1]
             
         # Mapback: Upsample to input size, remove padding, then resize to original size
-        prob_full = cv2.resize(prob, self.size, interpolation=cv2.INTER_LINEAR)
+        prob_full = cv2.resize(prob, self.input_size, interpolation=cv2.INTER_LINEAR)
         prob_unpadded = prob_full[pad_y : pad_y + new_h, pad_x : pad_x + new_w]
         prob_resized = cv2.resize(prob_unpadded, (W, H), interpolation=cv2.INTER_LINEAR)
         mask = (prob_resized > self.threshold).astype(np.uint8)
