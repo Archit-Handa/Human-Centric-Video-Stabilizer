@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+.env
+
+# OS / IDE
+.DS_Store
+.vscode/
+
+# Outputs / data
+outputs/
+data/
+models/
+
+# Byte-compiled notebooks (if any)
+.ipynb_checkpoints/
