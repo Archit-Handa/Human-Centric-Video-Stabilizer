@@ -91,3 +91,49 @@ def warp(frame_bgr: NDArray[np.uint8], dx: float, dy: float) -> NDArray[np.uint8
     )
     
     return out
+
+def compute_uniform_crop(
+    W: int,
+    H: int,
+    dx: NDArray[np.float32],
+    dy: NDArray[np.float32],
+    margin: int=0
+) -> Tuple[int, int, int, int]:
+    '''
+    Compute a single (x0, y0, w, h) crop that removes all black borders after applying the per-frame translations (dx, dy).
+    
+    Strategy:
+        - For positive dx (shift right), black appears on the LEFT -> crop more on LEFT
+        - For negative dx (shift left), black appears on the RIGHT -> crop more on RIGHT
+        
+        - For positive dy (shift down), black appears on the TOP -> crop more on TOP
+        - For negative dy (shift up), black appears on the BOTTOM -> crop more on BOTTOM
+    
+    The crop is the intersection region that remains valid for all frames.
+    A small margin (in pixels) is added to the crop to avoid edge artifacts for safety.
+    
+    Args:
+        W: Frame width in pixels.
+        H: Frame height in pixels.
+        dx: Horizontal translation in pixels along +x (rightwards).
+        dy: Vertical translation in pixels along +y (downwards).
+        margin: Extra margin in pixels.
+        
+    Returns:
+        (x0, y0, w, h): Crop region in (x0, y0, w, h) format.
+    '''
+    
+    left = max(0, int(np.ceil(np.max(dx)))) + margin
+    right = max(0, int(np.ceil(-np.min(dx)))) + margin
+    top = max(0, int(np.ceil(np.max(dy)))) + margin
+    bottom = max(0, int(np.ceil(-np.min(dy)))) + margin
+    
+    x0 = min(max(0, left), W)
+    y0 = min(max(0, top), H)
+    w = max(0, W - x0 - right)
+    h = max(0, H - y0 - bottom)
+    
+    if w < 1 or h < 1:
+        return 0, 0, W, H
+    
+    return x0, y0, w, h
