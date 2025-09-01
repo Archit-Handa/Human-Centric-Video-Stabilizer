@@ -5,6 +5,8 @@ import numpy as np
 from typing import Dict, Tuple, Optional
 from numpy.typing import NDArray
 
+from .utils import letterbox_resize, soft_argmax_2d
+
 Keypoint = Tuple[float, float, float]   # (x, y, confidence)
 
 class Pose2D:
@@ -49,23 +51,33 @@ class Pose2D:
             cx, cy = W / 2.0, H * 0.55
             return {'mid_hip': (cx, cy, 1.0)}
         
-        blob = cv2.dnn.blobFromImage(frame_bgr, 1/255.0, self.input_size, swapRB=True)
+        # Preprocess: letterbox to model input, then map coordinates back
+        padded, scale, (pad_x, pad_y), (new_w, new_h) = letterbox_resize(frame_bgr, self.input_size)
+        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # shape (1, 3, H, W)
         self.net.setInput(blob)
-        out = self.net.forward()    # shape (1, K, h, w)
-        _, K, h, w = out.shape
-        heatmap = out[0]
+        hms = self.net.forward()    # shape (1, K, h, w)
+        _, K, h, w = hms.shape
+        hm = hms[0]
         
         points = []
         for k in range(K):
-            m = heatmap[k]
-            idx = int(np.argmax(m))
-            py, px = divmod(idx, w)
-            conf = float(m[py, px])
-            x = (px + 0.5) * W / w
-            y = (py + 0.5) * H / H
-            points.append((x, y, conf))
+            m = hm[k]
+            px_hm, py_hm = soft_argmax_2d(m)
+            conf = float(m[int(round(py_hm)), int(round(px_hm))])
+            
+            # Map from heatmap coordinates to model input (padded) coordinates
+            x_in = (px_hm + 0.5) * self.input_size[0] / w
+            y_in = (py_hm + 0.5) * self.input_size[1] / H
+            
+            # Remove padding, then unscale to original
+            x_un = x_in - pad_x
+            y_un = y_in - pad_y
+            x = x_un / scale
+            y = y_un / scale
+            points.append((float(x), float(y), conf))
         
-        # Heuristic: prefer COCO hips (indices 11, 12) if confident; else fallback
+        # Prefer COCO hips (indices 11, 12) if present/confident; else fallback
         if K > 13 and points[11][2] > 0.2 and points[12][2] > 0.2:
             mx = (points[11][0] + points[12][0]) / 2.0
             my = (points[11][1] + points[12][1]) / 2.0

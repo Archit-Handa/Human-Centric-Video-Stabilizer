@@ -5,6 +5,8 @@ import numpy as np
 from typing import Optional, Tuple
 from numpy.typing import NDArray
 
+from .utils import letterbox_resize, sigmoid, softmax
+
 class BackgroundRemover:
     '''
     Person/background matting using an ONNX model loaded via OpenCV DNN.
@@ -49,17 +51,22 @@ class BackgroundRemover:
         if self.net is None:
             return np.ones((H, W), dtype=np.uint8)
         
-        blob = cv2.dnn.blobFromImage(frame_bgr, 1/255.0, self.input_size, swapRB=True)
+        # Preprocess: letterbox to model input, RGB normalize / 255
+        padded, scale, (pad_x, pad_y), (new_w, new_h) = letterbox_resize(frame_bgr, self.input_size)
+        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # shape (1, 3, H, W)
         self.net.setInput(blob)
-        out = self.net.forward()    # shape (1, C, H, W)
+        out = self.net.forward()    # shape (1, C, h, w)
         
         if out.shape[1] == 1:
-            prob = 1.0 / (1.0 + np.exp(-out[0, 0]))
+            prob = sigmoid(out[0, 0])
         else:
-            e = np.exp(out - out.max(axis=1, keepdims=True))
-            prob = (e[:, 1] / e.sum(axis=1))[0]
+            prob = softmax(out, axi=1)[0, 1]
             
-        mask = cv2.resize(prob, (W, H), interpolation=cv2.INTER_LINEAR)
-        mask = (mask > self.threshold).astype(np.uint8)
+        # Mapback: Upsample to input size, remove padding, then resize to original size
+        prob_full = cv2.resize(prob, self.size, interpolation=cv2.INTER_LINEAR)
+        prob_unpadded = prob_full[pad_y : pad_y + new_h, pad_x : pad_x + new_w]
+        prob_resized = cv2.resize(prob_unpadded, (W, H), interpolation=cv2.INTER_LINEAR)
+        mask = (prob_resized > self.threshold).astype(np.uint8)
         
         return mask
