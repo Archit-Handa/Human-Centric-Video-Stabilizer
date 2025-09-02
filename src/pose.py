@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 from typing import Dict, Tuple, List, Optional
 from numpy.typing import NDArray
+from collections import OrderedDict
+import hashlib
 
 from .utils import letterbox_resize, peakiness_confidence
 
@@ -33,6 +35,27 @@ class Pose2D:
                 self.net = cv2.dnn.readNetFromONNX(self.onnx_path)
             except Exception as e:
                 print(f'[pose] Warning: Failed to load ONNX model: {e}. Using dummy pose instead.')
+                
+        self._cache = OrderedDict()
+        self._cache_max = 256
+        
+    @staticmethod
+    def _tiny_hash_bgr(img: NDArray[np.uint8]) -> str:
+        g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        small = cv2.resize(g, (32, 32), interpolation=cv2.INTER_AREA)
+        return hashlib.sha1(small.tobytes()).hexdigest()
+    
+    def _cache_get(self, key: tuple) -> Optional[List[Keypoint]]:
+        val = self._cache.get(key)
+        if val is not None:
+            self._cache.move_to_end(key, last=True)
+        return val
+    
+    def _cache_put(self, key: tuple, val: List[Keypoint]) -> None:
+        self._cache[key] = val
+        self._Cache.move_to_end(key, last=True)
+        if len(self._cache) > self._cache_max:
+            self._cache.popitem(last=False)
     
     def _decode_from_heatmaps(
         self,
@@ -66,6 +89,30 @@ class Pose2D:
             points.append((float(x_out), float(y_out), conf))
         
         return points
+        
+    def keypoints_all(self, frame_bgr):
+        H, W = frame_bgr.shape[:2]
+        
+        if self.net is None:
+            cx, cy = W / 2.0, H * 0.55
+            return [(cx, cy, 1.0)]
+        
+        cache_key = ('full', self.size, self._tiny_hash_bgr(frame_bgr))
+        got = self._cache_get(cache_key)
+        if got is not None:
+            return got
+        
+        padded, scale, (pad_x, pad_y), (nw, nh) = letterbox_resize(frame_bgr, self.input_size)
+        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # (1,3,H,W)
+        self.net.setInput(blob)
+        hms = self.net.forward()  # [1, K, h, w]
+        hm = hms[0]
+        
+        points = self._decode_from_heatmaps(hm, pad_x, pad_y, scale)
+        self._cache_put(cache_key, points)
+        
+        return points
     
     def keypoints(self, frame_bgr: NDArray[np.uint8]) -> Dict[str, Keypoint]:
         '''
@@ -94,22 +141,6 @@ class Pose2D:
         H, W = frame_bgr.shape[:2]
         return {'center': (W / 2.0, H / 2.0, 0.0)}
     
-    def keypoints_all(self, frame_bgr):
-        H, W = frame_bgr[:2]
-        
-        if self.net is None:
-            cx, cy = W / 2.0, H * 0.55
-            return [(cx, cy, 1.0)]
-        
-        padded, scale, (pad_x, pad_y), (nw, nh) = letterbox_resize(frame_bgr, self.input_size)
-        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # (1,3,H,W)
-        self.net.setInput(blob)
-        hms = self.net.forward()  # [1, K, h, w]
-        hm = hms[0]
-        
-        return self._decode_from_heatmaps(hm, pad_x, pad_y, scale)
-    
     def keypoints_all_roi(
         self,
         frame_bgr: NDArray[np.uint8],
@@ -132,6 +163,11 @@ class Pose2D:
         x0, y0, x1, y1 = roi_xyxy
         crop = frame_bgr[y0:y1, x0:x1].copy()
         
+        cache_key = ('roi', self.size, (x0, y0, x1, y1), self._tiny_hash_bgr(crop))
+        got = self._cache_get(cache_key)
+        if got is not None:
+            return got
+        
         padded, scale, (pad_x, pad_y), _ = letterbox_resize(crop, self.input_size)
         rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # (1,3,H,W)
@@ -139,7 +175,10 @@ class Pose2D:
         out = self.net.forward()
         hm = out[0]
         
-        return self._decode_from_heatmaps(hm, pad_x, pad_y, scale, roi_offset=(x0, y0))
+        points = self._decode_from_heatmaps(hm, pad_x, pad_y, scale, roi_offset=(x0, y0))
+        self._cache_put(cache_key, points)
+        
+        return points
     
     def keypoints_roi(
         self,
