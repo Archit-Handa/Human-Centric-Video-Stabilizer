@@ -159,7 +159,7 @@ def draw_label(
     out = img.copy()
     H, W = out.shape[:2]
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale, thick = 0.6, 2
+    scale, thick = 1, 2
     (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
     box_w = tw + pad * 2
     box_h = th + pad * 2
@@ -207,7 +207,7 @@ def draw_alignment(
     if _in(rx, ry):
         cv2.circle(out, (int(rx), int(ry)), 5, (0, 0, 255), -1, cv2.LINE_AA)
         
-    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.7, 1
     def _label(x: float, y: float, text: str, color: Tuple[int, int, int]) -> None:
         if not _in(x, y): return
         
@@ -231,6 +231,6 @@ def draw_alignment(
         my = int((ry + ty) / 2.0) - 8
         mx = max(4, min(W - 4, mx))
         my = max(14, min(H - 4, my))
-        cv2.putText(out, d_text, (mx, my), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(out, d_text, (mx, my), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
     
     return out

@@ -59,6 +59,7 @@ def main() -> None:
     args = parse_args()
     outdir = os.path.join(args.outdir, os.path.splitext(os.path.basename(args.input))[0])
     os.makedirs(outdir, exist_ok=True)
+    print()
     
     try:
         cv2.setNumThreads(max(1, os.cpu_count() or 1))
@@ -79,7 +80,7 @@ def main() -> None:
     pose_series = []
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    p1 = tqdm(total=(total_frames if total_frames > 0 else None), desc='Pass 1/2', unit='frame')
+    p1 = tqdm(total=(total_frames if total_frames > 0 else None), desc='Pass 1/2 [Stabilizing Video]', unit='frame')
     
     # Pass 1: Collect ROI-driven reference points
     last_bbox = None
@@ -142,13 +143,16 @@ def main() -> None:
     
     dx_smooth, dy_smooth, dx_raw, dy_raw = compute_shifts(refs, cx, cy, args.smooth_window)
     
-    # Save transforms
+    print('\nSaving Pose Keypoints and Stabilization Data...')
+    
+    # Save transforms (CSV)
     transforms_csv = os.path.join(outdir, 'transforms.csv')
     with open(transforms_csv, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['frame', 'dx_raw', 'dy_raw', 'dx_smooth', 'dy_smooth'])
         for i, (xr, yr, xs, ys) in enumerate(zip(dx_raw, dy_raw, dx_smooth, dy_smooth)):
             w.writerow([i, float(xr), float(yr), float(xs), float(ys)])
+    print(f'- Saved transforms data at:     {outdir}/transforms.csv')
     
     # Save pose keypoints (JSON)
     kp_json_path = os.path.join(outdir, 'pose_keypoints.json')
@@ -157,6 +161,7 @@ def main() -> None:
             'joint_format': '(x, y, conf)',
             'frames': [[(float(x), float(y), float(c)) for (x, y, c) in fr] for fr in pose_series]
         }, f)
+    print(f'- Saved pose keypoints data at: {outdir}/pose_keypoints.json')
     
     # Save pose keypoints (CSV)
     kp_csv_path = os.path.join(outdir, 'pose_keypoints.csv')
@@ -166,6 +171,7 @@ def main() -> None:
         for fi, fr in enumerate(pose_series):
             for ji, (x, y, c) in enumerate(fr):
                 w.writerow([fi, ji, float(x), float(y), float(c)])
+    print(f'- Saved pose keypoints data at: {outdir}/pose_keypoints.csv')
             
     # Decide crop box once for all frames
     if args.crop == 'auto':
@@ -187,7 +193,8 @@ def main() -> None:
     out_comp = writer(os.path.join(outdir, 'comparison.mp4'), W_comp, H_comp, fps)
     out_dbg = writer(os.path.join(outdir, 'pose_debug.mp4'), W, H, fps) if args.debug_mode else None
     
-    p2 = tqdm(total=len(frames), desc='Pass 2/2', unit='frame')
+    print()
+    p2 = tqdm(total=len(frames), desc='Pass 2/2 [Exporting Videos]', unit='frame')
     
     # Pass 2: Apply warps and write videos
     for i, frame in enumerate(frames):
@@ -225,7 +232,7 @@ def main() -> None:
                 sy = float(H) / float(right_h_pre)
                 
             rx *= sx; ry *= sy
-            tx *= sx; ty *= ty
+            tx *= sx; ty *= sy
             
             right_disp = draw_alignment(right_disp, (rx, ry), (tx, ty), label_ref=ref_labels[i], label_tgt='target')
         
@@ -262,7 +269,7 @@ def main() -> None:
     if p2:
         p2.close()
     
-    print(f'Done. Outputs in: {outdir}')
+    print(f'\nDone. Outputs saved at: {outdir}')
     
 if __name__ == '__main__':
     main()
