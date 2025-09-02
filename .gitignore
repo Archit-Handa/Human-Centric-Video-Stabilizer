@@ -15,6 +15,7 @@ __pycache__/
 outputs/
 data/
 models/
+samples/
 
 # Byte-compiled notebooks (if any)
 .ipynb_checkpoints/
