@@ -6,6 +6,7 @@ import csv
 import cv2
 import numpy as np
 import json
+from tqdm import tqdm
 from typing import Tuple
 
 from .background import BackgroundRemover
@@ -61,6 +62,11 @@ def main() -> None:
     outdir = os.path.join(args.outdir, os.path.splitext(os.path.basename(args.input))[0])
     os.makedirs(outdir, exist_ok=True)
     
+    try:
+        cv2.setNumThreads(max(1, os.cpu_count() or 1))
+    except Exception:
+        pass
+    
     cap, fps, W, H = open_video(args.input)
     seg_wh = _parse_wh(args.seg_input)
     pose_wh = _parse_wh(args.pose_input)
@@ -73,16 +79,23 @@ def main() -> None:
     all_joints = []
     pose_series = []
     
-    # Collect reference points
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    p1 = tqdm(total=(total_frames if total_frames > 0 else None), desc='Pass 1/2', unit='frame')
+    
+    # Pass 1: Collect ROI-driven reference points
+    last_bbox = None
+    idx = -1
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-        
+
+        idx += 1
         frames.append(frame)
         
         mask = bg.segment(frame)
         bbox = largest_bbox_from_mask(mask, min_area=args.roi_min_area)
+        last_bbox = bbox
         
         if bbox is not None:
             bbox = expand_and_fit_aspect(bbox, W, H, aspect_w=pose_wh[0], aspect_h=pose_wh[1], scale=args.roi_scale)
@@ -111,7 +124,12 @@ def main() -> None:
         refs.append((float(x), float(y)))
         pose_series.append(joints_all)
         
+        if p1:
+            p1.update(1)
+        
     cap.release()
+    if p1:
+        p1.close()
     
     # Target Anchor
     if args.target_x is not None and args.target_y is not None:
@@ -161,11 +179,14 @@ def main() -> None:
     # Size for comparison.mp4
     W_comp, H_comp = 2*W, H
     
-    # Apply warps and write videos
+    # Writers
     out_stab = writer(os.path.join(outdir, 'stabilized.mp4'), W_stab, H_stab, fps)
     out_comp = writer(os.path.join(outdir, 'comparison.mp4'), W_comp, H_comp, fps)
     out_dbg = writer(os.path.join(outdir, 'pose_debug.mp4'), W, H, fps) if args.debug_pose else None
     
+    p2 = tqdm(total=len(frames), desc='Pass 2/2', unit='frame')
+    
+    # Pass 2: Apply warps and write videos
     for i, frame in enumerate(frames):
         stabilized = warp(frame, float(dx_smooth[i]), float(dy_smooth[i]))
         
@@ -197,12 +218,18 @@ def main() -> None:
                 draw_indices=True,
             )
             out_dbg.write(dbg)
+        
+        if p2:
+            p2.update(1)
     
     out_stab.release()
     out_comp.release()
     
     if out_dbg is not None:
         out_dbg.release()
+        
+    if p2:
+        p2.close()
     
     print(f'Done. Outputs in: {outdir}')
     
