@@ -10,7 +10,7 @@ from typing import Tuple
 from .background import BackgroundRemover
 from .pose import Pose2D
 from .stabilization import target_point, compute_shifts, warp, compute_uniform_crop
-from .rendering import open_video, writer, side_by_side
+from .rendering import open_video, writer, side_by_side, draw_keypoints
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Human-Centric Video Stabilization')
@@ -39,6 +39,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--comp-v-align', choices=['top', 'center', 'bottom'], default='center', help='Vertical alignment preset (eg. "center" | "top" | "bottom") when not resizing comparison.')
     parser.add_argument('--comp-h-align', choices=['left', 'center', 'right'], default='center', help='Horizontal alignment preset (eg. "center" | "left" | "right") when not resizing comparison.')
     
+    parser.add_argument("--debug-pose", action="store_true",
+               help="Write pose_debug.mp4 with joints/skeleton overlay")
+    parser.add_argument("--pose-conf-thr", type=float, default=0.20,
+                help="Confidence threshold for drawing joints")
+    parser.add_argument("--debug-draw-skeleton", action="store_true",
+                help="Draw COCO skeleton on debug video")
+    parser.add_argument("--debug-draw-indices", action="store_true",
+                help="Draw joint index labels on debug video")
+    
     return parser.parse_args()
 
 def _parse_wh(s: str) -> Tuple[int, int]:
@@ -61,6 +70,7 @@ def main() -> None:
     
     frames = []
     refs = []
+    all_joints = []
     
     # Collect reference points
     while True:
@@ -71,9 +81,13 @@ def main() -> None:
         frames.append(frame)
         keypoints = pose.keypoints(frame)
         
+        if args.debug_pose:
+            all_joints.append(pose.keypoints_all(frame))
+        
         # Prefer 'mid_hip' if present; otherwise fallback to seg centroid; else frame center
         if 'mid_hip' in keypoints:
             x, y, _ = keypoints['mid_hip']
+            # print('Midhip:', x, y)
         else:
             mask = bg.segment(frame)
             if mask.any():
@@ -113,17 +127,19 @@ def main() -> None:
     if args.stab_no_resize:
         W_stab, H_stab = wc, hc
     else:
-        W_stab, H_stab = W, 
+        W_stab, H_stab = W, H
     
     # Size for comparison.mp4
-    if args.comp_no_resize:
-        W_comp, H_comp = W + W_stab, max(H, H_stab)
-    else:
-        W_comp, H_comp = 2*W, H
+    W_comp, H_comp = 2*W, H
     
     # Apply warps and write videos
     out_stab = writer(os.path.join(args.outdir, 'stabilized.mp4'), W_stab, H_stab, fps)
     out_comp = writer(os.path.join(args.outdir, 'comparison.mp4'), W_comp, H_comp, fps)
+    
+    if args.debug_pose:
+        out_dbg = writer(os.path.join(args.outdir, 'pose_debug.mp4'), W, H, fps)
+    else:
+        out_dbg = None
     
     for i, frame in enumerate(frames):
         stabilized = warp(frame, float(dx_smooth[i]), float(dy_smooth[i]))
@@ -146,9 +162,23 @@ def main() -> None:
         
         out_stab.write(stabilized)
         out_comp.write(comparison)
+        
+        if out_dbg is not None:
+            dbg = draw_keypoints(
+                frame,
+                all_joints[i],
+                conf_thr=args.pose_conf_thr,
+                draw_skeleton=bool(args.debug_draw_skeleton),
+                draw_indices=bool(args.debug_draw_indices),
+            )
+            out_dbg.write(dbg)
     
     out_stab.release()
     out_comp.release()
+    
+    if out_dbg is not None:
+        out_dbg.release()
+    
     print(f'Done. Outputs in: {args.outdir}')
     
 if __name__ == '__main__':

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, List, Optional
 from numpy.typing import NDArray
 
-from .utils import letterbox_resize, soft_argmax_2d
+from .utils import letterbox_resize, peakiness_confidence
 
 Keypoint = Tuple[float, float, float]   # (x, y, confidence)
 
@@ -33,7 +33,38 @@ class Pose2D:
                 self.net = cv2.dnn.readNetFromONNX(self.onnx_path)
             except Exception as e:
                 print(f'[pose] Warning: Failed to load ONNX model: {e}. Using dummy pose instead.')
-                
+    
+    def _decode_from_heatmaps(
+        self,
+        hm: NDArray[np.float32],
+        pad_x: int,
+        pad_y: int,
+        scale: float
+    ) -> List[Keypoint]:
+        '''
+        For each channel:
+            1) Upsample heatmap to (H_in, W_in) = self.input_size
+            2) Argmax at input resolution (cv2.minMaxLoc)
+            3) Confidence = local peakiness confidence at argmax
+            4) Unpad and unscale to original frame coordinates
+        '''
+        
+        W_in, H_in = self.input_size
+        K, h, w = hm.shape
+        points = []
+        
+        for k in range(K):
+            m = hm[k]
+            m_up = cv2.resize(m, (W_in, H_in), interpolation=cv2.INTER_CUBIC)
+            _, _, _, maxLoc = cv2.minMaxLoc(m_up)
+            x_in, y_in = maxLoc
+            conf = peakiness_confidence(m_up, x_in, y_in, win=20)
+            x_out = (x_in - pad_x) / scale
+            y_out = (y_in - pad_y) / scale
+            points.append((float(x_out), float(y_out), conf))
+        
+        return points
+    
     def keypoints(self, frame_bgr: NDArray[np.uint8]) -> Dict[str, Keypoint]:
         '''
         Decode keypoints from the pose heatmaps, returning a small dict with a reference keypoint for stabilization.
@@ -45,40 +76,11 @@ class Pose2D:
             Dict of keypoints in (x, y, confidence) format. Preferred key: 'mid_hip'.
         '''
         
-        H, W = frame_bgr.shape[:2]
-        
-        if self.net is None:
-            cx, cy = W / 2.0, H * 0.55
-            return {'mid_hip': (cx, cy, 1.0)}
-        
-        # Preprocess: letterbox to model input, then map coordinates back
-        padded, scale, (pad_x, pad_y), (new_w, new_h) = letterbox_resize(frame_bgr, self.input_size)
-        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # shape (1, 3, H, W)
-        self.net.setInput(blob)
-        hms = self.net.forward()    # shape (1, K, h, w)
-        _, K, h, w = hms.shape
-        hm = hms[0]
-        
-        points = []
-        for k in range(K):
-            m = hm[k]
-            px_hm, py_hm = soft_argmax_2d(m)
-            conf = float(m[int(round(py_hm)), int(round(px_hm))])
-            
-            # Map from heatmap coordinates to model input (padded) coordinates
-            x_in = (px_hm + 0.5) * self.input_size[0] / w
-            y_in = (py_hm + 0.5) * self.input_size[1] / H
-            
-            # Remove padding, then unscale to original
-            x_un = x_in - pad_x
-            y_un = y_in - pad_y
-            x = x_un / scale
-            y = y_un / scale
-            points.append((float(x), float(y), conf))
+        points = self.keypoints_all(frame_bgr)
+        K = len(points)
         
         # Prefer COCO hips (indices 11, 12) if present/confident; else fallback
-        if K > 13 and points[11][2] > 0.2 and points[12][2] > 0.2:
+        if K >= 13 and points[11][2] > 0.05 and points[12][2] > 0.05:
             mx = (points[11][0] + points[12][0]) / 2.0
             my = (points[11][1] + points[12][1]) / 2.0
             conf = (points[11][2] + points[12][2]) / 2.0
@@ -87,5 +89,21 @@ class Pose2D:
         if K > 0:
             return {'nose': points[0]}
         
-        cx, cy = W / 2.0, H / 2.0
-        return {'center': (cx, cy, 0.0)}
+        H, W = frame_bgr.shape[:2]
+        return {'center': (W / 2.0, H / 2.0, 0.0)}
+    
+    def keypoints_all(self, frame_bgr):
+        H, W = frame_bgr[:2]
+        
+        if self.net is None:
+            cx, cy = W / 2.0, H * 0.55
+            return [(cx, cy, 1.0)]
+        
+        padded, scale, (pad_x, pad_y), (nw, nh) = letterbox_resize(frame_bgr, self.input_size)
+        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # (1,3,H,W)
+        self.net.setInput(blob)
+        hms = self.net.forward()  # [1, K, h, w]
+        hm = hms[0]
+        
+        return self._decode_from_heatmaps(hm, pad_x, pad_y, scale)

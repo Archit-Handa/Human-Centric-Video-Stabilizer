@@ -43,28 +43,36 @@ def softmax(x: NDArray, axis: int=1) -> NDArray:
     e = np.exp(x)
     return e / e.sum(axis=axis, keepdims=True)
 
-def soft_argmax_2d(hm: NDArray) -> Tuple[float, float]:
+def peakiness_confidence(m_up: NDArray[np.float32], x: int, y: int, win: int = 9) -> float:
     '''
-    Sub-pixel peak estimate from a single heatmap (h, w) using soft-argmax.
+    Local confidence in a (win x win) window around the peak.
     
     Args:
-        hm: Heatmap (h, w).
+        m_up: Upsampled heatmap (Ht, Wt).
+        x: x coord of the peak.
+        y: y coord of the peak.
+        win: Window size (win x win).
     
     Returns:
-        (x, y): Sub-pixel peak estimate coordinate in (x, y) format.
+        Confidence in the local peakiness.
     '''
     
-    h, w = hm.shape
-    p = hm - hm.max()
-    p = np.exp(p)
-    z = p.sum()
+    Ht, Wt = m_up.shape
+    half = win // 2
+    x0 = max(0, x - half)
+    x1 = min(Wt, x + half + 1)
+    y0 = max(0, y - half)
+    y1 = min(Ht, y + half + 1)
+    patch = m_up[y0:y1, x0:x1]
+    peak = float(m_up[y, x])
     
-    if z <= 0:
-        idx = int(np.argmax(hm))
-        py, px = divmod(idx, w)
-        return float(px), float(py)
+    # Exclude the center pixel from neighborhood mean
+    mask = np.ones_like(patch, dtype=bool)
+    mask[(y - y0), (x - x0)] = False
+    neigh = float(patch[mask].mean()) if np.any(mask) else 0.0
     
-    p /= z
-    xs = (p.sum(axis=0) * np.arange(w)).sum()
-    ys = (p.sum(axis=1) * np.arange(h)).sum()
-    return float(xs), float(ys)
+    # Map to (0,1): higher if peak >> neighbors
+    num = max(0.0, peak - neigh)
+    den = (abs(peak) + abs(neigh) + 1e-6)
+    
+    return float(min(1.0, num / den))

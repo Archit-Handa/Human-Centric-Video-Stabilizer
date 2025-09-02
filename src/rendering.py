@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, Iterable
 from numpy.typing import NDArray
+
+# COCO-17 skeleton pairs (by joint index)
+_COCO_PAIRS: list[tuple[int, int]] = [
+    (0,1),(0,2),(1,3),(2,4),
+    (5,6),(5,7),(7,9),(6,8),(8,10),
+    (5,11),(6,12),(11,12),(11,13),(12,14),(13,15),(14,16),
+]
+
 
 def open_video(video_path: str) -> Tuple[cv2.VideoCapture, float, int, int]:
     '''
@@ -72,7 +80,7 @@ def side_by_side(
     # No Resize: build a padded canvas
     target_h = max(hl, hr)
     target_w = max(wl, wr)
-    comp = np.full((target_h, 2*target_w, 3), (0, 0, 0), dtype=left_frame.dtype)
+    comp = np.full((target_h, 2*target_w, 3), (0, 0, 0), dtype=np.uint8)
     
     def x_off(w: int) -> int:
         if h_align == 'left':
@@ -94,6 +102,50 @@ def side_by_side(
     xr = x_off(wr)
     
     comp[yl : yl + hl, xl : xl + wl] = left_frame
-    comp[yr : yr + hr, xr : xr + wr] = right_frame
+    comp[yr : yr + hr, target_w + xr : target_w +xr + wr] = right_frame
 
     return comp
+
+def draw_keypoints(
+    frame: NDArray[np.uint8],
+    joints: Iterable[tuple[float, float, float]],
+    *,
+    conf_thr: float = 0.20,
+    draw_skeleton: bool = True,
+    draw_indices: bool = False,
+) -> NDArray[np.uint8]:
+    """
+    Overlay keypoints (and optional skeleton) on a copy of the frame.
+
+    Args:
+        frame: BGR uint8 image.
+        joints: iterable of (x,y,conf) in joint-index order.
+        conf_thr: threshold below which a joint is considered missing.
+        draw_skeleton: whether to draw COCO edges between visible joints.
+        draw_indices: label each drawn joint with its index.
+    """
+    out = frame.copy()
+    points = list(joints)
+    H, W = out.shape[:2]
+
+    # Skeleton
+    if draw_skeleton:
+        for a, b in _COCO_PAIRS:
+            if a < len(points) and b < len(points):
+                xa, ya, ca = points[a]
+                xb, yb, cb = points[b]
+                if ca >= conf_thr and cb >= conf_thr:
+                    if 0 <= xa < W and 0 <= xb < W and 0 <= ya < H and 0 <= yb < H:
+                        cv2.line(out, (int(round(xa)), int(round(ya))),
+                                      (int(round(xb)), int(round(yb))),
+                                      (0, 255, 255), 2, cv2.LINE_AA)
+
+    # Joints
+    for idx, (x, y, c) in enumerate(points):
+        if c >= conf_thr and 0 <= x < W and 0 <= y < H:
+            cv2.circle(out, (int(x), int(y)), 4, (0, 0, 255), thickness=-1, lineType=cv2.LINE_AA)
+            if draw_indices:
+                cv2.putText(out, str(idx), (int(x) + 5, int(y) - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+    return out
