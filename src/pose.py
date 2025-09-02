@@ -39,18 +39,20 @@ class Pose2D:
         hm: NDArray[np.float32],
         pad_x: int,
         pad_y: int,
-        scale: float
+        scale: float,
+        roi_offset: Tuple[int, int]=(0, 0)
     ) -> List[Keypoint]:
         '''
         For each channel:
             1) Upsample heatmap to (H_in, W_in) = self.input_size
             2) Argmax at input resolution (cv2.minMaxLoc)
             3) Confidence = local peakiness confidence at argmax
-            4) Unpad and unscale to original frame coordinates
+            4) Unpad and unscale to original frame coordinates; add roi_offset, if provided
         '''
         
         W_in, H_in = self.input_size
         K, h, w = hm.shape
+        x_off, y_off = roi_offset
         points = []
         
         for k in range(K):
@@ -59,8 +61,8 @@ class Pose2D:
             _, _, _, maxLoc = cv2.minMaxLoc(m_up)
             x_in, y_in = maxLoc
             conf = peakiness_confidence(m_up, x_in, y_in, win=20)
-            x_out = (x_in - pad_x) / scale
-            y_out = (y_in - pad_y) / scale
+            x_out = (x_in - pad_x) / scale + x_off
+            y_out = (y_in - pad_y) / scale + y_off
             points.append((float(x_out), float(y_out), conf))
         
         return points
@@ -107,3 +109,71 @@ class Pose2D:
         hm = hms[0]
         
         return self._decode_from_heatmaps(hm, pad_x, pad_y, scale)
+    
+    def keypoints_all_roi(
+        self,
+        frame_bgr: NDArray[np.uint8],
+        roi_xyxy: Optional[Tuple[int, int, int, int]]
+    ) -> List[Keypoint]:
+        '''
+        Decode all joints using a person Region of Interest (ROI) (x0, y0, x1, y1). Falls back to full frame if ROI is None.
+        
+        Args:
+            frame_bgr: Input frame (H, W, 3) in uint8 BGR format.
+            roi_xyxy: Person ROI (x0, y0, x1, y1).
+        
+        Returns:
+            List of keypoints in (x, y, confidence) format.
+        '''
+        
+        if roi_xyxy is None or self.net is None:
+            return self.keypoints_all(frame_bgr)
+        
+        x0, y0, x1, y1 = roi_xyxy
+        crop = frame_bgr[y0:y1, x0:x1].copy()
+        
+        padded, scale, (pad_x, pad_y), _ = letterbox_resize(crop, self.input_size)
+        rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        blob = np.transpose(rgb, (2, 0, 1))[None, ...]  # (1,3,H,W)
+        self.net.setInput(blob)
+        out = self.net.forward()
+        hm = out[0]
+        
+        return self._decode_from_heatmaps(hm, pad_x, pad_y, scale, roi_offset=(x0, y0))
+    
+    def keypoints_roi(
+        self,
+        frame_bgr: NDArray[np.uint8],
+        roi_xyxy: Optional[Tuple[int, int, int, int]]
+    ) -> Dict[str, Keypoint]:
+        '''
+        Decode keypoints from the pose heatmaps, returning a small dict with a reference keypoint for stabilization.
+        
+        Args:
+            frame_bgr: Input frame (H, W, 3) in uint8 BGR format.
+            roi_xyxy: Person ROI (x0, y0, x1, y1).
+            
+        Returns:
+            Dict of keypoints in (x, y, confidence) format. Preferred key: 'mid_hip'.
+        '''
+        
+        points = self.keypoints_all_roi(frame_bgr, roi_xyxy)
+        K = len(points)
+        
+        if K >= 13 and points[11][2] > 0.05 and points[12][2] > 0.05:
+            mx = (points[11][0] + points[12][0]) / 2.0
+            my = (points[11][1] + points[12][1]) / 2.0
+            conf = (points[11][2] + points[12][2]) / 2.0
+            return {'mid_hip': (mx, my, conf)}
+        
+        if K > 0:
+            return {'nose': points[0]}
+        
+        if roi_xyxy is not None:
+            x0, y0, x1, y1 = roi_xyxy
+            cx = (x0 + x1) / 2.0
+            cy = (y0 + y1) / 2.0
+            return {'center': (cx, cy, 0.0)}
+        
+        H, W = frame_bgr.shape[:2]
+        return {'center': (W / 2.0, H / 2.0, 0.0)}

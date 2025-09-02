@@ -5,12 +5,14 @@ import os
 import csv
 import cv2
 import numpy as np
+import json
 from typing import Tuple
 
 from .background import BackgroundRemover
 from .pose import Pose2D
 from .stabilization import target_point, compute_shifts, warp, compute_uniform_crop
 from .rendering import open_video, writer, side_by_side, draw_keypoints
+from .utils import largest_bbox_from_mask, expand_and_fit_aspect
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Human-Centric Video Stabilization')
@@ -32,21 +34,18 @@ def parse_args() -> argparse.Namespace:
     
     parser.add_argument('--crop', choices=['auto', 'none'], default='auto', help='Border crop mode.')
     parser.add_argument('--crop-margin', type=int, default=8, help='Border crop margin (pixels) for safety.')
+    parser.add_argument('--crop-no-resize', action='store_true', help='If set, stabilized and comparison videos keep cropped size instead of resizing back to original.')
     
-    parser.add_argument('--stab-no-resize', action='store_true', help='If set, stabilized.mp4 keeps cropped size instead of resizing back to original.')
-    
-    parser.add_argument('--comp-no-resize', action='store_true', help='If set, comparison.mp4 keeps cropped size of stabilized video instead of resizing back to original.')
     parser.add_argument('--comp-v-align', choices=['top', 'center', 'bottom'], default='center', help='Vertical alignment preset (eg. "center" | "top" | "bottom") when not resizing comparison.')
     parser.add_argument('--comp-h-align', choices=['left', 'center', 'right'], default='center', help='Horizontal alignment preset (eg. "center" | "left" | "right") when not resizing comparison.')
     
+    parser.add_argument('--roi-scale', type=float, default=1.25, help='Scale factor to expand the person bbox before fitting pose aspect.')
+    parser.add_argument('--roi-min-area', type=int, default=1500, help='Minimum mask area to accept a person bbox.')
+    
     parser.add_argument("--debug-pose", action="store_true",
                help="Write pose_debug.mp4 with joints/skeleton overlay")
-    parser.add_argument("--pose-conf-thr", type=float, default=0.20,
+    parser.add_argument("--pose-conf-thr", type=float, default=0.15,
                 help="Confidence threshold for drawing joints")
-    parser.add_argument("--debug-draw-skeleton", action="store_true",
-                help="Draw COCO skeleton on debug video")
-    parser.add_argument("--debug-draw-indices", action="store_true",
-                help="Draw joint index labels on debug video")
     
     return parser.parse_args()
 
@@ -59,7 +58,8 @@ def _parse_wh(s: str) -> Tuple[int, int]:
 
 def main() -> None:
     args = parse_args()
-    os.makedirs(args.outdir, exist_ok=True)
+    outdir = os.path.join(args.outdir, os.path.splitext(os.path.basename(args.input))[0])
+    os.makedirs(outdir, exist_ok=True)
     
     cap, fps, W, H = open_video(args.input)
     seg_wh = _parse_wh(args.seg_input)
@@ -71,6 +71,7 @@ def main() -> None:
     frames = []
     refs = []
     all_joints = []
+    pose_series = []
     
     # Collect reference points
     while True:
@@ -79,25 +80,36 @@ def main() -> None:
             break
         
         frames.append(frame)
-        keypoints = pose.keypoints(frame)
         
-        if args.debug_pose:
-            all_joints.append(pose.keypoints_all(frame))
+        mask = bg.segment(frame)
+        bbox = largest_bbox_from_mask(mask, min_area=args.roi_min_area)
         
-        # Prefer 'mid_hip' if present; otherwise fallback to seg centroid; else frame center
-        if 'mid_hip' in keypoints:
-            x, y, _ = keypoints['mid_hip']
-            # print('Midhip:', x, y)
+        if bbox is not None:
+            bbox = expand_and_fit_aspect(bbox, W, H, aspect_w=pose_wh[0], aspect_h=pose_wh[1], scale=args.roi_scale)
+            keypoints = pose.keypoints_roi(frame, bbox)
+            joints_all = pose.keypoints_all_roi(frame, bbox)
+            
+            if 'mid_hip' in keypoints:
+                x, y, _ = keypoints['mid_hip']
+            else:
+                x, y, _ = next(iter(keypoints.values()))
+        
+            if args.debug_pose:
+                all_joints.append(pose.keypoints_all_roi(frame, bbox))
         else:
-            mask = bg.segment(frame)
-            if mask.any():
-                ys, xs = np.nonzero(mask)
-                x = float(xs.mean())
-                y = float(ys.mean())
+            keypoints = pose.keypoints(frame)
+            joints_all = pose.keypoints_all(frame)
+            
+            if 'mid_hip' in keypoints:
+                x, y, _ = keypoints['mid_hip']
             else:
                 x, y = float(W) / 2.0, float(H) / 2.0
-        
+            
+            if args.debug_pose:
+                all_joints.append(pose.keypoints_all(frame))
+                
         refs.append((float(x), float(y)))
+        pose_series.append(joints_all)
         
     cap.release()
     
@@ -110,12 +122,29 @@ def main() -> None:
     dx_smooth, dy_smooth, dx_raw, dy_raw = compute_shifts(refs, cx, cy, args.smooth_window)
     
     # Save transforms
-    transforms_csv = os.path.join(args.outdir, 'transforms.csv')
+    transforms_csv = os.path.join(outdir, 'transforms.csv')
     with open(transforms_csv, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['frame', 'dx_raw', 'dy_raw', 'dx_smooth', 'dy_smooth'])
         for i, (xr, yr, xs, ys) in enumerate(zip(dx_raw, dy_raw, dx_smooth, dy_smooth)):
             w.writerow([i, float(xr), float(yr), float(xs), float(ys)])
+    
+    # Save pose keypoints (JSON)
+    kp_json_path = os.path.join(outdir, 'pose_keypoints.json')
+    with open(kp_json_path, 'w') as f:
+        json.dump({
+            'joint_format': '(x, y, conf)',
+            'frames': [[(float(x), float(y), float(c)) for (x, y, c) in fr] for fr in pose_series]
+        }, f)
+    
+    # Save pose keypoints (CSV)
+    kp_csv_path = os.path.join(outdir, 'pose_keypoints.csv')
+    with open(kp_csv_path, 'w') as f:
+        w = csv.writer(f)
+        w.writerow(['frame', 'joint_idx', 'x', 'y', 'conf'])
+        for fi, fr in enumerate(pose_series):
+            for ji, (x, y, c) in enumerate(fr):
+                w.writerow([fi, ji, float(x), float(y), float(c)])
             
     # Decide crop box once for all frames
     if args.crop == 'auto':
@@ -124,7 +153,7 @@ def main() -> None:
         x0, y0, wc, hc = 0, 0, W, H
         
     # Size for stabilized.mp4
-    if args.stab_no_resize:
+    if args.crop_no_resize:
         W_stab, H_stab = wc, hc
     else:
         W_stab, H_stab = W, H
@@ -133,13 +162,9 @@ def main() -> None:
     W_comp, H_comp = 2*W, H
     
     # Apply warps and write videos
-    out_stab = writer(os.path.join(args.outdir, 'stabilized.mp4'), W_stab, H_stab, fps)
-    out_comp = writer(os.path.join(args.outdir, 'comparison.mp4'), W_comp, H_comp, fps)
-    
-    if args.debug_pose:
-        out_dbg = writer(os.path.join(args.outdir, 'pose_debug.mp4'), W, H, fps)
-    else:
-        out_dbg = None
+    out_stab = writer(os.path.join(outdir, 'stabilized.mp4'), W_stab, H_stab, fps)
+    out_comp = writer(os.path.join(outdir, 'comparison.mp4'), W_comp, H_comp, fps)
+    out_dbg = writer(os.path.join(outdir, 'pose_debug.mp4'), W, H, fps) if args.debug_pose else None
     
     for i, frame in enumerate(frames):
         stabilized = warp(frame, float(dx_smooth[i]), float(dy_smooth[i]))
@@ -149,13 +174,13 @@ def main() -> None:
             stabilized = stabilized[y0:y0+hc, x0:x0+wc]
             
         # Resize back (for stabilized.mp4) unless user opted out
-        if not args.stab_no_resize and (stabilized.shape[1] != W or stabilized.shape[0] != H):
+        if not args.crop_no_resize and (stabilized.shape[1] != W or stabilized.shape[0] != H):
             stabilized = cv2.resize(stabilized, (W, H), interpolation=cv2.INTER_LINEAR)
         
         comparison = side_by_side(
             frame,
             stabilized,
-            resize_right=not args.comp_no_resize,
+            resize_right=not args.crop_no_resize,
             v_align=args.comp_v_align,
             h_align=args.comp_h_align
         )
@@ -168,8 +193,8 @@ def main() -> None:
                 frame,
                 all_joints[i],
                 conf_thr=args.pose_conf_thr,
-                draw_skeleton=bool(args.debug_draw_skeleton),
-                draw_indices=bool(args.debug_draw_indices),
+                draw_skeleton=True,
+                draw_indices=True,
             )
             out_dbg.write(dbg)
     
@@ -179,7 +204,7 @@ def main() -> None:
     if out_dbg is not None:
         out_dbg.release()
     
-    print(f'Done. Outputs in: {args.outdir}')
+    print(f'Done. Outputs in: {outdir}')
     
 if __name__ == '__main__':
     main()

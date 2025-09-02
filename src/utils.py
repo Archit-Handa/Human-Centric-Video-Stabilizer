@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from typing import Tuple
+from typing import Optional, Tuple
 from numpy.typing import NDArray
 
 def letterbox_resize(
@@ -76,3 +76,73 @@ def peakiness_confidence(m_up: NDArray[np.float32], x: int, y: int, win: int = 9
     den = (abs(peak) + abs(neigh) + 1e-6)
     
     return float(min(1.0, num / den))
+
+def largest_bbox_from_mask(mask: NDArray[np.uint8], min_area: int=500) -> Optional[Tuple[int, int, int, int]]:
+    '''
+    Find the largest connected component bounding box (x0, y0, x1, y1) from a binary mask.
+    
+    Args:
+        mask: Binary mask (H, W).
+        min_area: Minimum area of the largest connected component.
+    
+    Returns:
+        (x0, y0, x1, y1): Bounding box of the largest connected component.
+    '''
+    
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    
+    best = max(cnts, key=cv2.contourArea)
+    if cv2.contourArea(best) < float(min_area):
+        return None
+    
+    x0, y0, w, h = cv2.boundingRect(best)
+    return (int(x0), int(y0), int(x0 + w), int(y0 + h))
+
+def expand_and_fit_aspect(
+    box: Tuple[int, int, int, int],
+    W: int, H: int,
+    aspect_w: int, aspect_h: int,
+    scale: float=1.25
+) -> Tuple[int, int, int, int]:
+    '''
+    Expand a bounding box to fit the aspect ratio of the original image and clamp to image bounds.
+    
+    Args:
+        box: Bounding box (x0, y0, x1, y1).
+        W: Original image width.
+        H: Original image height.
+        aspect_w: Aspect ratio width.
+        aspect_h: Aspect ratio height.
+        scale: Scale factor.
+    
+    Returns:
+        (x0, y0, x1, y1): Expanded bounding box.
+    '''
+    
+    x0, y0, x1, y1 = map(int, box)
+    cx = (x0 + x1) / 2.0
+    cy = (y0 + y1) / 2.0
+    w = (x1 - x0) * scale
+    h = (y1 - y0) * scale
+    
+    target_aspect_ratio = aspect_w / aspect_h
+    current_aspect_ratio = w / h if h > 1e-6 else target_aspect_ratio
+    
+    if current_aspect_ratio > target_aspect_ratio:
+        h = w / target_aspect_ratio
+    else:
+        w = h * target_aspect_ratio
+    
+    x0n = int(round(cx - w / 2.0))
+    y0n = int(round(cy - h / 2.0))
+    x1n = int(round(cx + w / 2.0))
+    y1n = int(round(cy + h / 2.0))
+    
+    x0n = max(0, min(x0n, W - 1))
+    y0n = max(0, min(y0n, H - 1))
+    x1n = max(x0n + 1, min(x1n, W))
+    y1n = max(y0n + 1, min(y1n, H))
+    
+    return x0n, y0n, x1n, y1n
