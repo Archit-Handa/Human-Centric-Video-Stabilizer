@@ -116,6 +116,45 @@ Inside `outputs/<video-name>/`:
 - `transforms.csv` - per-frame raw and smooth translations
 - `pose_keypoints.json`/`pose_keypoints.csv` - per-frame joint `(x, y, conf)`
 
+## Samples
+
+**Sample Video** (Royalty-free): [Pexels: A Man Walking Outdoors](https://www.pexels.com/video/a-man-walking-outdoors-8296233/)
+
+### 1. Basic Run without Cropping
+
+**Command:**
+```bash
+python -m src.run \     
+--input data/a-man-walking-outdoors.mp4 \
+--outdir outputs \
+--seg-onnx models/u2net_human_seg.onnx \
+--pose-onnx models/litehrnet_18_coco_256x192.onnx \
+--crop 'none'
+```
+
+**Results:**
+
+![comparison.mp4 for basic run without cropping](samples/comparison.gif "comparison.mp4 for basic run without cropping"){ width=50% }
+![stabilized.mp4 for basic run without cropping](samples/stabilized.gif "stabilized.mp4 for basic run without cropping"){ width=50% }
+
+### 2. Basic Run with Cropping and Debug
+
+**Command:**
+```bash
+python -m src.run \     
+--input data/a-man-walking-outdoors.mp4 \
+--outdir outputs \
+--seg-onnx models/u2net_human_seg.onnx \
+--pose-onnx models/litehrnet_18_coco_256x192.onnx \
+--crop 'auto'
+--debug-mode
+```
+
+**Results:**
+![comparison.mp4 for basic run with cropping and debug](samples/comparison_debug.gif "comparison.mp4 for basic run with cropping and debug"){ width=33% }
+![stabilized.mp4 for basic run with cropping and debug](samples/stabilized_debug.gif "stabilized.mp4 for basic run with cropping and debug"){ width=33% }
+![pose_debug.mp4 for basic run with cropping and debug](samples/pose_debug.gif "pose_debug.mp4 for basic run with cropping and debug"){ width=33% }
+
 ## Process
 1. **Segmentation (BackgroundRemover)**
 
