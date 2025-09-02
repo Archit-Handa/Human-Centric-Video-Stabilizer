@@ -149,3 +149,88 @@ def draw_keypoints(
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
     return out
+
+def draw_label(
+    img: NDArray[np.uint8],
+    text: str,
+    corner: str='tl',   # tl | tr | bl | br
+    pad: int=6
+) -> NDArray[np.uint8]:
+    out = img.copy()
+    H, W = out.shape[:2]
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale, thick = 0.6, 2
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+    box_w = tw + pad * 2
+    box_h = th + pad * 2
+    
+    if corner == 'tl':
+        x0, y0 = 0, 0
+    elif corner == 'tr':
+        x0, y0 = W - box_w - 8, 8
+    elif corner == 'bl':
+        x0, y0 = 8, H - box_h - 8
+    else:   # 'br'
+        x0, y0 = W - box_w - 8, H - box_h - 8
+        
+    overlay = out.copy()
+    cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.45, out, 0.55, 0.0, dst=out)
+    
+    tx = x0 + pad
+    ty = y0 + box_h - pad - 2
+    cv2.putText(out, text, (tx, ty), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+    
+    return out
+
+def draw_alignment(
+    img: NDArray[np.uint8],
+    ref_xy: Tuple[float, float],
+    tgt_xy: Tuple[float, float],
+    label_ref: str='ref',
+    label_tgt: str='target',
+    show_distance: bool=True
+) -> NDArray[np.uint8]:
+    out = img.copy()
+    H, W = out.shape[:2]
+    rx, ry = float(ref_xy[0]), float(ref_xy[1])
+    tx, ty = float(tgt_xy[0]), float(tgt_xy[1])
+    
+    def _in(x: float, y: float) -> bool:
+        return (0 <= x < W) and (0 <= y < H)
+    
+    if _in(rx, ry) and _in(tx, ty):
+        cv2.line(out, (int(rx), int(ry)), (int(tx), int(ty)), (255, 255, 255), 2, cv2.LINE_AA)
+    
+    if _in(tx, ty):
+        cv2.circle(out, (int(tx), int(ty)), 5, (0, 200, 0), -1, cv2.LINE_AA)
+    if _in(rx, ry):
+        cv2.circle(out, (int(rx), int(ry)), 5, (0, 0, 255), -1, cv2.LINE_AA)
+        
+    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+    def _label(x: float, y: float, text: str, color: Tuple[int, int, int]) -> None:
+        if not _in(x, y): return
+        
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+        pad = 4
+        
+        lx = int(min(max(0, x + 8), W - tw - 2))
+        ly = int(min(max(th + 6, y - 8), H - 2))
+        
+        cv2.rectangle(out, (lx - pad, ly - th - pad), (lx + tw + pad, ly + pad), (0, 0, 0), -1)
+        cv2.putText(out, text, (lx, ly), font, scale, color, thick, cv2.LINE_AA)
+    
+    _label(tx, ty, label_tgt, (0, 255, 0))
+    _label(rx, ry, label_ref, (0, 0, 255))
+    
+    if show_distance and _in(rx, ry) and _in(tx, ty):
+        d = float(np.hypot(rx - tx, ry - ty))
+        d_text = f'dist = {d:.2f}px'
+
+        mx = int((rx + tx) / 2.0)
+        my = int((ry + ty) / 2.0) - 8
+        mx = max(4, min(W - 4, mx))
+        my = max(14, min(H - 4, my))
+        cv2.putText(out, d_text, (mx, my), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    return out

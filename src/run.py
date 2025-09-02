@@ -12,7 +12,7 @@ from typing import Tuple
 from .background import BackgroundRemover
 from .pose import Pose2D
 from .stabilization import target_point, compute_shifts, warp, compute_uniform_crop
-from .rendering import open_video, writer, side_by_side, draw_keypoints
+from .rendering import open_video, writer, side_by_side, draw_keypoints, draw_label, draw_alignment
 from .utils import largest_bbox_from_mask, expand_and_fit_aspect
 
 def parse_args() -> argparse.Namespace:
@@ -43,10 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--roi-scale', type=float, default=1.25, help='Scale factor to expand the person bbox before fitting pose aspect.')
     parser.add_argument('--roi-min-area', type=int, default=1500, help='Minimum mask area to accept a person bbox.')
     
-    parser.add_argument("--debug-pose", action="store_true",
-               help="Write pose_debug.mp4 with joints/skeleton overlay")
-    parser.add_argument("--pose-conf-thr", type=float, default=0.15,
-                help="Confidence threshold for drawing joints")
+    parser.add_argument("--debug-mode", action="store_true",
+               help="Write pose_debug.mp4 with joints/skeleton overlay and comparison.mp4 with alignment overlay.")
     
     return parser.parse_args()
 
@@ -96,6 +94,7 @@ def main() -> None:
         mask = bg.segment(frame)
         bbox = largest_bbox_from_mask(mask, min_area=args.roi_min_area)
         last_bbox = bbox
+        ref_labels = []
         
         if bbox is not None:
             bbox = expand_and_fit_aspect(bbox, W, H, aspect_w=pose_wh[0], aspect_h=pose_wh[1], scale=args.roi_scale)
@@ -104,10 +103,11 @@ def main() -> None:
             
             if 'mid_hip' in keypoints:
                 x, y, _ = keypoints['mid_hip']
+                name = 'mid_hip'
             else:
-                x, y, _ = next(iter(keypoints.values()))
+                name, (x, y, _) = next(iter(keypoints.items()))
         
-            if args.debug_pose:
+            if args.debug_mode:
                 all_joints.append(pose.keypoints_all_roi(frame, bbox))
         else:
             keypoints = pose.keypoints(frame)
@@ -115,13 +115,16 @@ def main() -> None:
             
             if 'mid_hip' in keypoints:
                 x, y, _ = keypoints['mid_hip']
+                name = 'mid_hip'
             else:
                 x, y = float(W) / 2.0, float(H) / 2.0
+                name = 'center'
             
-            if args.debug_pose:
+            if args.debug_mode:
                 all_joints.append(pose.keypoints_all(frame))
                 
         refs.append((float(x), float(y)))
+        ref_labels.append(name)
         pose_series.append(joints_all)
         
         if p1:
@@ -182,7 +185,7 @@ def main() -> None:
     # Writers
     out_stab = writer(os.path.join(outdir, 'stabilized.mp4'), W_stab, H_stab, fps)
     out_comp = writer(os.path.join(outdir, 'comparison.mp4'), W_comp, H_comp, fps)
-    out_dbg = writer(os.path.join(outdir, 'pose_debug.mp4'), W, H, fps) if args.debug_pose else None
+    out_dbg = writer(os.path.join(outdir, 'pose_debug.mp4'), W, H, fps) if args.debug_mode else None
     
     p2 = tqdm(total=len(frames), desc='Pass 2/2', unit='frame')
     
@@ -194,13 +197,41 @@ def main() -> None:
         if x0 != 0 or y0 != 0 or wc != W or hc != H:
             stabilized = stabilized[y0:y0+hc, x0:x0+wc]
             
+        right_h_pre, right_w_pre = stabilized.shape[:2]
+            
         # Resize back (for stabilized.mp4) unless user opted out
         if not args.crop_no_resize and (stabilized.shape[1] != W or stabilized.shape[0] != H):
             stabilized = cv2.resize(stabilized, (W, H), interpolation=cv2.INTER_LINEAR)
         
+        left_disp = draw_label(frame, 'Original', corner='tl')
+        right_disp = draw_label(stabilized, 'Stabilized', corner='tl')
+        
+        if args.debug_mode:
+            # Draw Left debug frame
+            ref_left = refs[i]
+            tgt_left = (cx, cy)
+            
+            left_disp = draw_alignment(left_disp, ref_left, tgt_left, label_ref=ref_labels[i], label_tgt='target')
+            
+            # Draw Right debug frame
+            rx = refs[i][0] + float(dx_smooth[i]) - float(x0)
+            ry = refs[i][1] + float(dy_smooth[i]) - float(y0)
+            tx = float(cx) - float(x0)
+            ty = float(cy) - float(y0)
+            sx = sy = 1.0
+            
+            if not args.crop_no_resize and (right_w_pre != W or right_h_pre != H):
+                sx = float(W) / float(right_w_pre)
+                sy = float(H) / float(right_h_pre)
+                
+            rx *= sx; ry *= sy
+            tx *= sx; ty *= ty
+            
+            right_disp = draw_alignment(right_disp, (rx, ry), (tx, ty), label_ref=ref_labels[i], label_tgt='target')
+        
         comparison = side_by_side(
-            frame,
-            stabilized,
+            left_disp,
+            right_disp,
             resize_right=not args.crop_no_resize,
             v_align=args.comp_v_align,
             h_align=args.comp_h_align
@@ -213,7 +244,7 @@ def main() -> None:
             dbg = draw_keypoints(
                 frame,
                 all_joints[i],
-                conf_thr=args.pose_conf_thr,
+                conf_thr=0.05,
                 draw_skeleton=True,
                 draw_indices=True,
             )
