@@ -53,7 +53,7 @@ class Pose2D:
     
     def _cache_put(self, key: tuple, val: List[Keypoint]) -> None:
         self._cache[key] = val
-        self._Cache.move_to_end(key, last=True)
+        self._cache.move_to_end(key, last=True)
         if len(self._cache) > self._cache_max:
             self._cache.popitem(last=False)
     
@@ -97,7 +97,7 @@ class Pose2D:
             cx, cy = W / 2.0, H * 0.55
             return [(cx, cy, 1.0)]
         
-        cache_key = ('full', self.size, self._tiny_hash_bgr(frame_bgr))
+        cache_key = ('full', self.input_size, self._tiny_hash_bgr(frame_bgr))
         got = self._cache_get(cache_key)
         if got is not None:
             return got
@@ -163,7 +163,7 @@ class Pose2D:
         x0, y0, x1, y1 = roi_xyxy
         crop = frame_bgr[y0:y1, x0:x1].copy()
         
-        cache_key = ('roi', self.size, (x0, y0, x1, y1), self._tiny_hash_bgr(crop))
+        cache_key = ('roi', self.input_size, (x0, y0, x1, y1), self._tiny_hash_bgr(crop))
         got = self._cache_get(cache_key)
         if got is not None:
             return got
