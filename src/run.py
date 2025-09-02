@@ -74,6 +74,7 @@ def main() -> None:
     
     frames = []
     refs = []
+    ref_labels = []
     all_joints = []
     pose_series = []
     
@@ -94,7 +95,6 @@ def main() -> None:
         mask = bg.segment(frame)
         bbox = largest_bbox_from_mask(mask, min_area=args.roi_min_area)
         last_bbox = bbox
-        ref_labels = []
         
         if bbox is not None:
             bbox = expand_and_fit_aspect(bbox, W, H, aspect_w=pose_wh[0], aspect_h=pose_wh[1], scale=args.roi_scale)
