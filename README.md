@@ -134,8 +134,13 @@ python -m src.run \
 
 **Results:**
 
-![comparison.mp4 for basic run without cropping](samples/comparison.gif "comparison.mp4 for basic run without cropping"){ width=50% }
-![stabilized.mp4 for basic run without cropping](samples/stabilized.gif "stabilized.mp4 for basic run without cropping"){ width=50% }
+<img src="samples/comparison.gif" alt="comparison.mp4 for basic run without cropping" style="width: 100%">
+
+_**Figure 1.** Side-by-side comparison of Original vs Stabilized video without cropping_
+
+<img src="samples/stabilized.gif" alt="stabilized.mp4 for basic run without cropping" style="width: 50%">
+
+_**Figure 2.** Stabilized video without cropping_
 
 ### 2. Basic Run with Cropping and Debug
 
@@ -151,9 +156,23 @@ python -m src.run \
 ```
 
 **Results:**
-![comparison.mp4 for basic run with cropping and debug](samples/comparison_debug.gif "comparison.mp4 for basic run with cropping and debug"){ width=33% }
-![stabilized.mp4 for basic run with cropping and debug](samples/stabilized_debug.gif "stabilized.mp4 for basic run with cropping and debug"){ width=33% }
-![pose_debug.mp4 for basic run with cropping and debug](samples/pose_debug.gif "pose_debug.mp4 for basic run with cropping and debug"){ width=33% }
+
+<img src="samples/comparison_debug.gif" alt="comparison.mp4 for basic run with cropping and debug" style="width: 100%">
+
+_**Figure 3.** Side-by-side comparison of Original vs Stabilized video with cropping and debug (alignment overlay in both frames; target point in green and reference point ('mid-hip') in red)_
+> The target and reference ('mid-hip') points are much better aligned (closer together) in stabilised (right) frame than the original   (left) frame.
+
+<img src="samples/stabilized_debug.gif" alt="stabilized.mp4 for basic run with cropping and debug" style="width: 50%">
+
+_**Figure 4.** Stabilized video with cropping and debug_
+
+<img src="samples/pose_debug.gif" alt="pose_debug.mp4 for basic run with cropping and debug" style="width: 50%">
+
+_**Figure 5.** Pose detection video with detected joints/keypoints and skeleton traced (only produced when `--debug-mode` is set)_
+
+> Actual outputs (videos, csv, and json data) can be viewed in the following links:
+> 1. Basic Run without Cropping: [Click Here](https://drive.google.com/drive/folders/1K6ZH2Cf0SUuBfzsUy95v2sFjFOF__4Y_?usp=sharing)
+> 2. Basic Run with Cropping and Debug: [Click Here](https://drive.google.com/drive/folders/1FgV90IhRtekLsNJ8QzQEFsySQou6Zkfg?usp=sharing)
 
 ## Process
 1. **Segmentation (BackgroundRemover)**
